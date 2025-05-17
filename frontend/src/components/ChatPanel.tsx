@@ -1,12 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Box, Typography, Button, TextField, Paper, Divider, CircularProgress, IconButton } from '@mui/material';
 
-// Delete icon SVG component
-const DeleteIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <path d="M6 6l12 12M6 18L18 6" />
+// Custom Send icon SVG component
+const SendIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M22 2L11 13" />
+    <path d="M22 2L15 22L11 13L2 9L22 2Z" />
   </svg>
 );
+
+interface ChatMessage {
+  role: string;
+  content: string;
+}
 
 interface Summary {
   id: string;
@@ -25,23 +31,22 @@ const ChatPanel: React.FC<ChatPanelProps> = () => {
   const [summaries, setSummaries] = useState<Summary[]>([]);
   const [combinedSummary, setCombinedSummary] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const [message, setMessage] = useState('');
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
   useEffect(() => {
     fetchSummaries();
-
-    // Listen for summary updates
-    const handleSummaryUpdate = (event: CustomEvent<{summaries: Summary[], combinedSummary: string | null}>) => {
-      setSummaries(event.detail.summaries);
-      setCombinedSummary(event.detail.combinedSummary);
-    };
-
-    window.addEventListener('updateSummaries', handleSummaryUpdate as EventListener);
-
-    return () => {
-      window.removeEventListener('updateSummaries', handleSummaryUpdate as EventListener);
-    };
+    fetchChatHistory();
   }, []);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [chatHistory]);
 
   const fetchSummaries = async () => {
     try {
@@ -61,35 +66,54 @@ const ChatPanel: React.FC<ChatPanelProps> = () => {
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const fetchChatHistory = async () => {
     try {
-      setDeletingIds(prev => new Set(prev).add(id));
-      const response = await fetch(`http://localhost:8000/sources/${id}`, {
-        method: 'DELETE',
-      });
-      
-      if (!response.ok) {
-        throw new Error('문서 삭제에 실패했습니다');
+      const response = await fetch('http://localhost:8000/chat/history/');
+      if (response.ok) {
+        const data = await response.json();
+        setChatHistory(data.history || []);
       }
-
-      const data = await response.json();
-      
-      // Update summaries from the response
-      setSummaries(data.all_summaries || []);
-      setCombinedSummary(data.combined_summary);
     } catch (error) {
-      console.error('문서 삭제 중 오류:', error);
-      alert('문서 삭제에 실패했습니다');
-    } finally {
-      setDeletingIds(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(id);
-        return newSet;
-      });
+      console.error('채팅 기록 가져오기 실패:', error);
     }
   };
 
-  if (loading) {
+  const handleSendMessage = async () => {
+    if (!message.trim()) return;
+
+    try {
+      setLoading(true);
+      const response = await fetch('http://localhost:8000/chat/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message: message.trim() }),
+      });
+
+      if (!response.ok) {
+        throw new Error('메시지 전송에 실패했습니다');
+      }
+
+      const data = await response.json();
+      setChatHistory(data.history);
+      setMessage('');
+    } catch (error) {
+      console.error('메시지 전송 실패:', error);
+      alert('메시지 전송에 실패했습니다. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKeyPress = (event: React.KeyboardEvent) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      handleSendMessage();
+    }
+  };
+
+  if (loading && chatHistory.length === 0) {
     return (
       <Box
         sx={{
@@ -119,48 +143,74 @@ const ChatPanel: React.FC<ChatPanelProps> = () => {
           flexDirection: 'column',
           p: 3,
           overflowY: 'auto',
+          gap: 2,
         }}
       >
-        {summaries.length > 0 ? (
-          <>
-            {combinedSummary && (
-              <Paper
-                elevation={0}
-                sx={{
-                  p: 2,
-                  mb: 3,
-                  border: '1px solid #1a73e8',
-                  borderRadius: '8px',
-                  bgcolor: '#f8f9fa',
-                }}
-              >
-                <Typography
-                  variant="subtitle1"
-                  sx={{ fontSize: '0.875rem', fontWeight: 500, mb: 1, color: '#1a73e8' }}
-                >
-                  📚 통합 요약
-                </Typography>
-                <Divider sx={{ my: 1 }} />
-                <Typography
-                  variant="body2"
-                  sx={{
-                    color: combinedSummary.includes('실패') ? '#d93025' : '#202124',
-                    whiteSpace: 'pre-wrap',
-                    fontSize: '0.875rem',
-                  }}
-                >
-                  {combinedSummary}
-                </Typography>
-              </Paper>
-            )}
-          </>
-        ) : (
+        {summaries.length > 0 && combinedSummary && (
+          <Paper
+            elevation={0}
+            sx={{
+              p: 2,
+              mb: 3,
+              border: '1px solid #1a73e8',
+              borderRadius: '8px',
+              bgcolor: '#f8f9fa',
+            }}
+          >
+            <Typography
+              variant="subtitle1"
+              sx={{ fontSize: '0.875rem', fontWeight: 500, mb: 1, color: '#1a73e8' }}
+            >
+              📚 통합 요약
+            </Typography>
+            <Divider sx={{ my: 1 }} />
+            <Typography
+              variant="body2"
+              sx={{
+                color: combinedSummary.includes('실패') ? '#d93025' : '#202124',
+                whiteSpace: 'pre-wrap',
+                fontSize: '0.875rem',
+              }}
+            >
+              {combinedSummary}
+            </Typography>
+          </Paper>
+        )}
+
+        {chatHistory.map((msg, index) => (
+          <Paper
+            key={index}
+            elevation={0}
+            sx={{
+              p: 2,
+              maxWidth: '80%',
+              alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+              bgcolor: msg.role === 'user' ? '#1a73e8' : '#f8f9fa',
+              borderRadius: '12px',
+              borderTopRightRadius: msg.role === 'user' ? '4px' : '12px',
+              borderTopLeftRadius: msg.role === 'assistant' ? '4px' : '12px',
+            }}
+          >
+            <Typography
+              sx={{
+                color: msg.role === 'user' ? '#fff' : '#202124',
+                fontSize: '0.875rem',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {msg.content}
+            </Typography>
+          </Paper>
+        ))}
+        <div ref={messagesEndRef} />
+
+        {chatHistory.length === 0 && (
           <Box sx={{ textAlign: 'center', maxWidth: '600px', mx: 'auto' }}>
             <Typography variant="h6" sx={{ mb: 2, color: '#202124', fontSize: '1.1rem' }}>
               👋 안녕하세요!
             </Typography>
             <Typography variant="body1" sx={{ color: '#5f6368', fontSize: '0.95rem', lineHeight: 1.6 }}>
-            ✨ 문서를 업로드하고 저와 대화해보세요 ✨
+              ✨ 저와 대화를 시작해보세요 ✨
             </Typography>
           </Box>
         )}
@@ -170,12 +220,20 @@ const ChatPanel: React.FC<ChatPanelProps> = () => {
         sx={{
           p: 2,
           borderTop: '1px solid #e8eaed',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
         }}
       >
         <TextField
           fullWidth
-          placeholder="문서를 업로드하여 시작하세요"
-          disabled={summaries.length === 0}
+          placeholder="메시지를 입력하세요..."
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          onKeyPress={handleKeyPress}
+          disabled={loading}
+          multiline
+          maxRows={4}
           variant="outlined"
           size="small"
           sx={{
@@ -185,17 +243,27 @@ const ChatPanel: React.FC<ChatPanelProps> = () => {
             },
           }}
         />
-        <Typography
-          variant="caption"
+        <IconButton
+          onClick={handleSendMessage}
+          disabled={loading || !message.trim()}
           sx={{
-            display: 'block',
-            textAlign: 'center',
-            mt: 1,
-            color: '#5f6368',
+            bgcolor: '#1a73e8',
+            color: '#fff',
+            '&:hover': {
+              bgcolor: '#1557b0',
+            },
+            '&.Mui-disabled': {
+              bgcolor: '#e8eaed',
+              color: '#9aa0a6',
+            },
           }}
         >
-          NotebookLM의 응답이 부정확할 수 있으니 반드시 확인해주세요.
-        </Typography>
+          {loading ? (
+            <CircularProgress size={24} sx={{ color: '#fff' }} />
+          ) : (
+            <SendIcon />
+          )}
+        </IconButton>
       </Box>
     </>
   );

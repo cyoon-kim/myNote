@@ -41,6 +41,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 notes_db = []
 sources_db = []
 combined_summary = None  # 통합 요약을 저장할 전역 변수
+chat_history = []  # 채팅 기록을 저장할 전역 변수
 
 class Note(BaseModel):
     id: Optional[str] = None
@@ -55,6 +56,17 @@ class Source(BaseModel):
     upload_date: str
     file_type: str
     summary: Optional[str] = None
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    message: str
+
+class ChatResponse(BaseModel):
+    response: str
+    history: List[ChatMessage]
 
 async def generate_summary(content: str, filename: str, existing_summaries: List[dict] = None) -> str:
     try:
@@ -300,6 +312,55 @@ async def delete_source(source_id: str):
         if isinstance(e, HTTPException):
             raise e
         raise HTTPException(status_code=500, detail=f"문서 삭제 중 오류가 발생했습니다: {str(e)}")
+
+@app.post("/chat/")
+async def chat(request: ChatRequest):
+    try:
+        # Add user message to history
+        chat_history.append(ChatMessage(role="user", content=request.message))
+        
+        # Prepare messages for API call
+        messages = [
+            {"role": "system", "content": """당신은 친절하고 도움이 되는 AI 어시스턴트입니다. 
+사용자의 질문에 명확하고 정확하게 답변해주세요. 
+필요한 경우 이모지를 사용해 대화를 더 친근하게 만들어주세요."""}
+        ]
+        
+        # Add chat history to messages
+        for msg in chat_history:
+            messages.append({"role": msg.role, "content": msg.content})
+        
+        # Call OpenAI API
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500
+        )
+        
+        # Get assistant's response
+        assistant_message = response.choices[0].message.content
+        
+        # Add assistant's response to history
+        chat_history.append(ChatMessage(role="assistant", content=assistant_message))
+        
+        # Return response and updated history
+        return ChatResponse(
+            response=assistant_message,
+            history=chat_history
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/chat/history/")
+async def get_chat_history():
+    return {"history": chat_history}
+
+@app.delete("/chat/history/")
+async def clear_chat_history():
+    chat_history.clear()
+    return {"message": "Chat history cleared"}
 
 if __name__ == "__main__":
     import uvicorn
